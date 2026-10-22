@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { NextPage } from 'next'
 import Head from 'next/head'
 import Link from 'next/link'
@@ -56,9 +56,22 @@ const SAMPLE_DELIVERABLES: DeliverableFile[] = [
   },
 ]
 
+// ── Demo Milestones ────────────────────────────────────────────
+
+const DEMO_GIG_ID = '00000000deadbeef'
+
+const INITIAL_MILESTONES: TrackerMilestone[] = [
+  { index: 0, label: 'Design Mockups', amount: '500', token: 'USDC', status: 'Funded' },
+  { index: 1, label: 'Frontend Implementation', amount: '1200', token: 'USDC', status: 'Funded' },
+  { index: 2, label: 'Smart Contract Audit', amount: '800', token: 'USDC', status: 'Pending' },
+  { index: 3, label: 'Deployment & QA', amount: '500', token: 'USDC', status: 'Pending' },
+]
+
 const Dashboard: NextPage = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const { price: usdcPrice, status: priceStatus } = useUSDCPrice()
+  const [lastRollback, setLastRollback] = useState<RollbackEvent | null>(null)
+  const [milestones] = useState<TrackerMilestone[]>(INITIAL_MILESTONES)
 
   // Offline-first PWA hooks
   const isOnline = useOnlineStatus()
@@ -93,6 +106,94 @@ const Dashboard: NextPage = () => {
   function handleUploadError(entry: UploadedFile) {
     console.error('IPFS pin failed for', entry.file.name, entry.error)
   }
+
+  // ── Optimistic tracker helpers ────────────────────────────
+
+  const getEffective = useCallback(
+    (milestoneIndex: number): MilestoneStatus => {
+      const key: MilestoneKey = { gigId: DEMO_GIG_ID, milestoneIndex }
+      const ms = milestones.find((m) => m.index === milestoneIndex)
+      return getEffectiveStatus(key, ms?.status ?? 'Pending')
+    },
+    [milestones],
+  )
+
+  const checkOptimistic = useCallback(
+    (milestoneIndex: number): boolean => {
+      const key: MilestoneKey = { gigId: DEMO_GIG_ID, milestoneIndex }
+      return getOptimisticState(key)?.isOptimistic ?? false
+    },
+    [],
+  )
+
+  /**
+   * Simulate an optimistic escrow action. Applies the optimistic update
+   * immediately, then after a short delay simulates the on-chain confirmation
+   * (or a random rollback for demo purposes).
+   */
+  const simulateAction = useCallback(
+    (milestoneIndex: number, currentStatus: MilestoneStatus, nextStatus: MilestoneStatus) => {
+      const key: MilestoneKey = { gigId: DEMO_GIG_ID, milestoneIndex }
+
+      try {
+        applyOptimisticUpdate(key, currentStatus, nextStatus)
+      } catch (err) {
+        console.error('Invalid transition:', err)
+        return
+      }
+
+      // Simulate a 2-second on-chain confirmation (20% chance of failure for demo)
+      setTimeout(() => {
+        const shouldFail = Math.random() < 0.2
+        if (shouldFail) {
+          const reason = 'Simulated ledger failure: transaction rejected by network'
+          rollbackUpdate(key, reason)
+          setLastRollback({
+            key,
+            previousStatus: currentStatus,
+            attemptedStatus: nextStatus,
+            reason,
+            rolledBackAt: Date.now(),
+          })
+        } else {
+          confirmUpdate(key)
+        }
+      }, 2000)
+    },
+    [],
+  )
+
+  const handleFund = useCallback(
+    (milestoneIndex: number) => {
+      const ms = milestones.find((m) => m.index === milestoneIndex)
+      if (ms) simulateAction(milestoneIndex, ms.status, 'Funded')
+    },
+    [milestones, simulateAction],
+  )
+
+  const handleRelease = useCallback(
+    (milestoneIndex: number) => {
+      const ms = milestones.find((m) => m.index === milestoneIndex)
+      if (ms) simulateAction(milestoneIndex, ms.status, 'Released')
+    },
+    [milestones, simulateAction],
+  )
+
+  const handleDispute = useCallback(
+    (milestoneIndex: number) => {
+      const ms = milestones.find((m) => m.index === milestoneIndex)
+      if (ms) simulateAction(milestoneIndex, ms.status, 'Disputed')
+    },
+    [milestones, simulateAction],
+  )
+
+  const handleRefund = useCallback(
+    (milestoneIndex: number) => {
+      const ms = milestones.find((m) => m.index === milestoneIndex)
+      if (ms) simulateAction(milestoneIndex, ms.status, 'Refunded')
+    },
+    [milestones, simulateAction],
+  )
 
   return (
     <>
